@@ -1,28 +1,32 @@
 <!doctype html>
 <html>
-  <head><meta charset="utf-8" /><style>body{font-family:Arial;padding:16px}pre{white-space:pre-wrap}</style></head>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: Arial, sans-serif; padding: 16px; margin: 0; }
+      pre { white-space: pre-wrap; background: #f5f5f5; padding: 12px; border-radius: 4px; }
+      #q { background: #e3f2fd; padding: 8px; border-radius: 4px; margin-bottom: 8px; }
+      hr { margin: 16px 0; border: none; border-top: 1px solid #ddd; }
+    </style>
+  </head>
   <body>
     <h3>AI Response</h3>
     <div id="q"></div>
     <hr/>
-    <pre id="reply"></pre>
+    <pre id="reply">Loading...</pre>
     <script>
-      window.electronAPI.onSelection((d)=>{}); // no-op
-      const {ipcRenderer} = require('electron');
-      const { contextBridge } = require('electron');
-      // receive via the preload->ipc (we used webContents.send from main earlier)
-      window.addEventListener('DOMContentLoaded', () => {
-        const q = document.getElementById('q');
-        const r = document.getElementById('reply');
-        window.electronAPI && window.electronAPI.onSelection && window.electronAPI.onSelection(()=>{}); // keep safe
-      });
-
-      // use IPC without exposing additional APIs: fallback to listen to 'ai-response' event sent from main
-      const { ipcRenderer: ipc } = require('electron');
-      ipc.on('ai-response', (ev, data) => {
-        document.getElementById('q').textContent = data.query;
-        document.getElementById('reply').textContent = data.reply;
-      });
+      // This script will receive the IPC message from main process
+      // Note: We can't access ipcRenderer directly here due to context isolation
+      // The preload script should expose the needed APIs
+      
+      // Listen for the ai-response event that will be sent by main process
+      if (window.electronAPI) {
+        // Use the exposed API from preload
+        window.electronAPI.onAIResponse && window.electronAPI.onAIResponse((data) => {
+          document.getElementById('q').textContent = `Query: ${data.query}`;
+          document.getElementById('reply').textContent = data.reply;
+        });
+      }
     </script>
   </body>
 </html>

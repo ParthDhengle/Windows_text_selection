@@ -5,8 +5,7 @@ const net = require('net');
 const { spawn } = require('child_process');
 
 const PIPE_PATH = '\\\\.\\pipe\\ai_selection_pipe'; // must match C# PIPE_NAME
-const HELPER_REL_PATH = path.join(__dirname, '..', 'native-helper', 'SelectionWatcher', 'bin', 'Debug', 'SelectionWatcher.exe'); 
-// Update path to your compiled EXE (Debug or Release)
+const HELPER_REL_PATH = path.join(__dirname, 'native-helper', 'SelectionWatcher', 'bin', 'Debug', 'net8.0-windows', 'SelectionWatcher.exe'); 
 
 // Popup size
 const POPUP_W = 140;
@@ -76,7 +75,30 @@ function launchHelperExecutable() {
   try {
     const exePath = path.resolve(HELPER_REL_PATH);
     console.log('Launching helper at', exePath);
-    const child = spawn(exePath, [], { detached: true, stdio: 'ignore' });
+    
+    // Check if file exists
+    const fs = require('fs');
+    if (!fs.existsSync(exePath)) {
+      console.error('Helper executable not found at:', exePath);
+      console.log('Please build the C# project first using: dotnet build');
+      return;
+    }
+    
+    const child = spawn(exePath, [], { detached: true, stdio: 'pipe' });
+    
+    // Log helper output for debugging
+    child.stdout.on('data', (data) => {
+      console.log('Helper stdout:', data.toString());
+    });
+    
+    child.stderr.on('data', (data) => {
+      console.log('Helper stderr:', data.toString());
+    });
+    
+    child.on('error', (err) => {
+      console.error('Failed to start helper:', err);
+    });
+    
     child.unref();
   } catch (err) {
     console.warn('Failed to spawn helper automatically. Make sure you compiled the C# helper and set HELPER_REL_PATH correctly.', err);
@@ -84,9 +106,11 @@ function launchHelperExecutable() {
 }
 
 function connectPipe() {
-  // try to connect repeatedly
+  // For named pipes on Windows, we need to connect differently
   const tryConnect = () => {
     if (pipeSocket && !pipeSocket.destroyed) return;
+    
+    // Connect to named pipe
     pipeSocket = net.createConnection(PIPE_PATH, () => {
       console.log('Connected to selection pipe.');
     });
@@ -113,16 +137,17 @@ function connectPipe() {
     pipeSocket.on('error', (err) => {
       // try reconnect after delay
       console.log('Pipe error:', err.message);
-      setTimeout(tryConnect, 800);
+      setTimeout(tryConnect, 2000); // Increased delay
     });
 
     pipeSocket.on('close', () => {
       console.log('Pipe closed, reconnecting...');
-      setTimeout(tryConnect, 500);
+      setTimeout(tryConnect, 1000);
     });
   };
 
-  tryConnect();
+  // Wait a bit before first connection attempt to let helper start
+  setTimeout(tryConnect, 2000);
 }
 
 // Handle Ask AI request from popup renderer

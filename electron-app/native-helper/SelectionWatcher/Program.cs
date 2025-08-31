@@ -1,132 +1,170 @@
-﻿// Program.cs
-using System;
+﻿using System;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Automation;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
 using System.Diagnostics;
-using Newtonsoft.Json; // Install-Package Newtonsoft.Json
+using Newtonsoft.Json;
 
 namespace SelectionWatcher
 {
     class Program
     {
-        // Pipe name (must match in Electron)
         const string PIPE_NAME = "ai_selection_pipe";
-
-        // writer is set when a client connects
         static StreamWriter globalWriter = null;
         static object writerLock = new object();
+        static string lastClipboardText = "";
+        static DateTime lastCheckTime = DateTime.MinValue;
 
-        [STAThread] // important for UI Automation
+        // Low-level mouse hook
+        private const int WH_MOUSE_LL = 14;
+        private const int WM_LBUTTONUP = 0x0202;
+        private const int WM_RBUTTONUP = 0x0205;
+
+        private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+        private static LowLevelMouseProc _proc = HookCallback;
+        private static IntPtr _hookID = IntPtr.Zero;
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        [DllImport("user32.dll")]
+        static extern bool GetCursorPos(out POINT lpPoint);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
+        [STAThread]
         static void Main(string[] args)
         {
-            Console.WriteLine("SelectionWatcher starting...");
+            Console.WriteLine("SelectionWatcher starting (mouse hook + clipboard monitoring)...");
 
             // Start the named-pipe server in background
             Task.Run(() => RunPipeServer());
 
-            // Subscribe to TextSelectionChangedEvent for all descendants of desktop
-            Automation.AddAutomationEventHandler(
-                TextPatternIdentifiers.TextSelectionChangedEvent,
-                AutomationElement.RootElement,
-                TreeScope.Subtree,
-                (sender, e) => OnTextSelectionChanged(sender, e)
-            );
+            // Install global mouse hook
+            _hookID = SetHook(_proc);
 
-            // Also listen for focus changes — some controls only update selection on focus events
-            Automation.AddAutomationEventHandler(
-                AutomationElement.AutomationFocusChangedEvent,
-                AutomationElement.RootElement,
-                TreeScope.Subtree,
-                (sender, e) => OnFocusChanged(sender, e)
-            );
+            Console.WriteLine("Monitoring text selections. Select text and the popup will appear!");
+            Console.WriteLine("Press Enter to exit.");
 
-            Console.WriteLine("Listening for selection changes. Press Enter to exit.");
-            Console.ReadLine();
+            // Keep the application running
+            Application.Run();
 
-            Automation.RemoveAllEventHandlers();
+            UnhookWindowsHookEx(_hookID);
         }
 
-        static void OnFocusChanged(AutomationElement sender, AutomationEventArgs e)
+        private static IntPtr SetHook(LowLevelMouseProc proc)
         {
-            // optional: when focus changes, try to read any selection from the focused element
-            TrySendSelectionFromElement(sender);
+            using (Process curProcess = Process.GetCurrentProcess())
+            using (ProcessModule curModule = curProcess.MainModule)
+            {
+                return SetWindowsHookEx(WH_MOUSE_LL, proc,
+                    GetModuleHandle(curModule.ModuleName), 0);
+            }
         }
 
-        static void OnTextSelectionChanged(AutomationElement sender, AutomationEventArgs e)
+        private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            TrySendSelectionFromElement(sender);
+            if (nCode >= 0 && (wParam == (IntPtr)WM_LBUTTONUP))
+            {
+                // Mouse button released - check for text selection after a small delay
+                Task.Run(async () =>
+                {
+                    await Task.Delay(100); // Small delay to let selection complete
+                    CheckForTextSelection();
+                });
+            }
+
+            return CallNextHookEx(_hookID, nCode, wParam, lParam);
         }
 
-        static void TrySendSelectionFromElement(AutomationElement element)
+        private static void CheckForTextSelection()
         {
             try
             {
-                if (element == null) return;
+                // Prevent too frequent checks
+                if (DateTime.Now.Subtract(lastCheckTime).TotalMilliseconds < 300)
+                    return;
 
-                // Some controls won't support TextPattern
-                object patternObj = null;
-                if (!element.TryGetCurrentPattern(TextPattern.Pattern, out patternObj)) return;
+                lastCheckTime = DateTime.Now;
 
-                var textPattern = patternObj as TextPattern;
-                if (textPattern == null) return;
-
-                var ranges = textPattern.GetSelection();
-                if (ranges == null || ranges.Length == 0) return;
-
-                // We take the first range
-                var range = ranges[0];
-                string selected = range.GetText(-1);
-                if (string.IsNullOrWhiteSpace(selected)) return;
-
-                // Try get bounding rectangles (may be empty)
-                double[] rects = range.GetBoundingRectangles(); // array length 0 or multiples of 4
-                double x = 0, y = 0, w = 0, h = 0;
-                if (rects != null && rects.Length >= 4)
+                // Use SendKeys to simulate Ctrl+C and check clipboard
+                string originalClipboard = "";
+                try
                 {
-                    // UIA returns rectangles as [l,t,r,b] sequence sometimes or [l,t,w,h] depending on control.
-                    // We'll attempt to interpret as left,top,right,bottom if length >= 4.
-                    x = rects[0];
-                    y = rects[1];
-                    // If the next two values look like right,bottom:
-                    if (rects[2] >= x && rects[3] >= y)
+                    if (Clipboard.ContainsText())
+                        originalClipboard = Clipboard.GetText();
+                }
+                catch { }
+
+                // Simulate Ctrl+C to copy selected text
+                SendKeys.SendWait("^c");
+
+                // Wait a bit for clipboard to update
+                Thread.Sleep(50);
+
+                if (Clipboard.ContainsText())
+                {
+                    string currentText = Clipboard.GetText();
+
+                    // Check if we got new text that's different from what was there before
+                    if (!string.IsNullOrWhiteSpace(currentText) &&
+                        currentText != originalClipboard &&
+                        currentText != lastClipboardText &&
+                        currentText.Length > 2 &&
+                        currentText.Length < 5000)
                     {
-                        double right = rects[2], bottom = rects[3];
-                        w = Math.Max(1.0, right - x);
-                        h = Math.Max(1.0, bottom - y);
-                    }
-                    else // fallback
-                    {
-                        w = rects[2];
-                        h = rects[3];
+                        lastClipboardText = currentText;
+
+                        // Get cursor position for popup placement
+                        GetCursorPos(out POINT cursor);
+
+                        var payload = new
+                        {
+                            type = "selection",
+                            text = currentText,
+                            rect = new { x = cursor.X, y = cursor.Y, width = 0, height = 0 },
+                            process = "detected",
+                            timestamp = DateTime.UtcNow.ToString("o")
+                        };
+
+                        string json = JsonConvert.SerializeObject(payload);
+                        SendJson(json);
+                        Console.WriteLine($"Selection detected: '{currentText.Substring(0, Math.Min(50, currentText.Length))}...'");
                     }
                 }
 
-                int pid = element.Current.ProcessId;
-                string procName = "unknown";
-                try { procName = Process.GetProcessById(pid).ProcessName; } catch { }
-
-                var payload = new
+                // Restore original clipboard if it was different
+                if (originalClipboard != "" && Clipboard.ContainsText() && Clipboard.GetText() != originalClipboard)
                 {
-                    type = "selection",
-                    text = selected,
-                    rect = new { x = x, y = y, width = w, height = h },
-                    process = procName,
-                    timestamp = DateTime.UtcNow.ToString("o")
-                };
-
-                string json = JsonConvert.SerializeObject(payload);
-
-                SendJson(json);
-                Console.WriteLine($"Sent selection ({selected.Length} chars) from {procName}");
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(200);
+                        try { Clipboard.SetText(originalClipboard); } catch { }
+                    });
+                }
             }
             catch (Exception ex)
             {
-                // swallow errors but print to console for debugging
-                Console.WriteLine("Error getting selection: " + ex.Message);
+                Console.WriteLine("Selection check error: " + ex.Message);
             }
         }
 
@@ -155,11 +193,11 @@ namespace SelectionWatcher
             {
                 try
                 {
-                    using (var server = new NamedPipeServerStream(PIPE_NAME, PipeDirection.Out, 1, PipeTransmissionMode.Message, PipeOptions.Asynchronous))
+                    using (var server = new NamedPipeServerStream(PIPE_NAME, PipeDirection.Out, 1))
                     {
-                        Console.WriteLine("Named pipe server waiting for client...");
+                        Console.WriteLine("Named pipe server waiting for connection...");
                         server.WaitForConnection();
-                        Console.WriteLine("Named pipe client connected.");
+                        Console.WriteLine("Electron app connected!");
 
                         using (var writer = new StreamWriter(server, Encoding.UTF8) { AutoFlush = true })
                         {
@@ -168,10 +206,10 @@ namespace SelectionWatcher
                                 globalWriter = writer;
                             }
 
-                            // Keep pipe open while connected. We don't expect reading from client in this simple example.
+                            // Keep connection alive
                             while (server.IsConnected)
                             {
-                                Thread.Sleep(200);
+                                Thread.Sleep(100);
                             }
 
                             lock (writerLock)
@@ -179,6 +217,8 @@ namespace SelectionWatcher
                                 globalWriter = null;
                             }
                         }
+
+                        Console.WriteLine("Electron app disconnected.");
                     }
                 }
                 catch (Exception ex)
@@ -186,8 +226,7 @@ namespace SelectionWatcher
                     Console.WriteLine("Pipe server error: " + ex.Message);
                 }
 
-                // small delay before retrying accept
-                Thread.Sleep(500);
+                Thread.Sleep(1000);
             }
         }
     }
