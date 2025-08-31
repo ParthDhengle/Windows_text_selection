@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><style>body{font-family:Arial;padding:16px}pre{white-space:pre-wrap}</style></head>
+  <body>
+    <h3>AI Response</h3>
+    <div id="q"></div>
+    <hr/>
+    <pre id="reply"></pre>
+    <script>
+      window.electronAPI.onSelection((d)=>{}); // no-op
+      const {ipcRenderer} = require('electron');
+      const { contextBridge } = require('electron');
+      // receive via the preload->ipc (we used webContents.send from main earlier)
+      window.addEventListener('DOMContentLoaded', () => {
+        const q = document.getElementById('q');
+        const r = document.getElementById('reply');
+        window.electronAPI && window.electronAPI.onSelection && window.electronAPI.onSelection(()=>{}); // keep safe
+      });
+
+      // use IPC without exposing additional APIs: fallback to listen to 'ai-response' event sent from main
+      const { ipcRenderer: ipc } = require('electron');
+      ipc.on('ai-response', (ev, data) => {
+        document.getElementById('q').textContent = data.query;
+        document.getElementById('reply').textContent = data.reply;
+      });
+    </script>
+  </body>
+</html>
