@@ -1,0 +1,6 @@
+C:\Users\Parth Dhengle\Desktop\Projects\Gen Ai\text selection\electron-app\native-helper\obj\Release\net9.0-windows\SelectionWatcher.csproj.AssemblyReference.cache
+C:\Users\Parth Dhengle\Desktop\Projects\Gen Ai\text selection\electron-app\native-helper\obj\Release\net9.0-windows\SelectionWatcher.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Parth Dhengle\Desktop\Projects\Gen Ai\text selection\electron-app\native-helper\obj\Release\net9.0-windows\SelectionWatcher.AssemblyInfoInputs.cache
+C:\Users\Parth Dhengle\Desktop\Projects\Gen Ai\text selection\electron-app\native-helper\obj\Release\net9.0-windows\SelectionWatcher.AssemblyInfo.cs
+C:\Users\Parth Dhengle\Desktop\Projects\Gen Ai\text selection\electron-app\native-helper\obj\Release\net9.0-windows\SelectionWatcher.csproj.CoreCompileInputs.cache
+C:\Users\Parth Dhengle\Desktop\Projects\Gen Ai\text selection\electron-app\native-helper\obj\Release\net9.0-windows\SelectionWatcher.sourcelink.json
